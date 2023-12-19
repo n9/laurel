@@ -1,0 +1,50 @@
+on:
+  push:
+    branches: 
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: alpine
+    steps:
+      - name: Prepare
+        run: |
+          apk add git ca-certificates rust cargo clang-dev acl-static musl-dev linux-headers make pandoc
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          RUSTFLAGS='-C target-feature=+crt-static -L /lib -l static=acl' \
+              cargo build --target x86_64-alpine-linux-musl --release
+          make -C man
+      - name: Build tarball
+        run: |
+          ln -f target/x86_64-alpine-linux-musl/release/laurel target/x86_64-alpine-linux-musl/release/laurel2audit .
+          tar -czf laurel.tar.gz laurel laurel2audit *.md man/
+          sha256sum laurel.tar.gz > sha256sums.txt
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: |
+            laurel.tar.gz
+            sha256sums.txt
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      # create release after successful build
+      - uses: actions/checkout@v4
+      - name: Get artifacts
+        uses: actions/download-artifact@v4
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create --target ${GITHUB_SHA} "n9-${GITHUB_SHA::8}" build/*
